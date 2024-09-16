@@ -59,6 +59,89 @@ struct CircomInput {
     extra: HashMap<String, Value>,
 }
 
+
+#[cfg(not(target_family = "wasm"))]
+fn compute_witnesscalc<G1, G2>(
+    current_public_input: Vec<String>,
+    private_input: HashMap<String, Value>,
+    witness_generator_bin: &Path,
+    witness_generator_file: &[u8],
+    witness_generator_output: &Path,
+) -> Vec<<G1 as Group>::Scalar>
+where
+    G1: Group<Base = <G2 as Group>::Scalar>,
+    G2: Group<Base = <G1 as Group>::Scalar>,
+{
+    use std::time::{Duration, Instant};
+
+    use circom::reader::generate_witness_from_witnesscalc;
+
+    let decimal_stringified_input: Vec<String> = current_public_input
+        .iter()
+        .map(|x| BigInt::from_str_radix(x, 16).unwrap().to_str_radix(10))
+        .collect();
+
+    let input = CircomInput {
+        step_in: decimal_stringified_input.clone(),
+        extra: private_input.clone(),
+    };
+
+    // let is_wasm = match &witness_generator_file {
+    //     FileLocation::PathBuf(path) => path.extension().unwrap_or_default() == "wasm",
+    //     FileLocation::URL(_) => true,
+    // };
+    let input_json = serde_json::to_string(&input).unwrap();
+
+    // if is_wasm {
+    //     generate_witness_from_wasm::<F<G1>>(
+    //         &witness_generator_file,
+    //         &input_json,
+    //         &witness_generator_output,
+    //     )
+    // } else {
+        // let witness_generator_file = match &witness_generator_file {
+        //     FileLocation::PathBuf(path) => path,
+        //     FileLocation::URL(_) => panic!("unreachable"),
+        // };
+        // if witness_generator_bin.exists() {
+            // let mut input = HashMap::<String, Vec<U256>>::new();
+            // for (key, value) in private_input.iter() {
+            //     let mut value_u256 = vec![];
+            //     if value.is_u64() {
+            //         value_u256.push(U256::from(value.as_u64().unwrap()));
+            //     } else if value.is_array() {
+            //         value_u256.append(
+            //             &mut value
+            //             .as_array()
+            //             .unwrap()
+            //             .iter()
+            //             .map(|num| U256::from(num.as_u64().unwrap()))
+            //             .collect::<Vec<U256>>()
+            //         );
+            //     } else {
+            //         panic!("invalid value in input");
+            //     }
+            //     input.insert(key.clone(), value_u256);
+            // }
+            // let graph_bytes = std::fs::read(&witness_generator_bin).unwrap();
+            // let graph = init_graph(&graph_bytes).unwrap();
+            // let witness = witness::calculate_witness(input, &graph);
+            // println!("witness: {:?}", witness.unwrap());
+            generate_witness_from_witnesscalc::<F<G1>>(
+                witness_generator_bin,
+                witness_generator_file,
+                &input_json,
+                witness_generator_output)
+        // } else {
+        //     generate_witness_from_bin::<F<G1>>(
+        //         &witness_generator_file,
+        //         &input_json,
+        //         &witness_generator_output,
+        //     )
+        // }
+    // }
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn compute_witness<G1, G2>(
     current_public_input: Vec<String>,
@@ -101,9 +184,32 @@ where
             FileLocation::URL(_) => panic!("unreachable"),
         };
         if witness_generator_bin.exists() {
+            // let mut input = HashMap::<String, Vec<U256>>::new();
+            // for (key, value) in private_input.iter() {
+            //     let mut value_u256 = vec![];
+            //     if value.is_u64() {
+            //         value_u256.push(U256::from(value.as_u64().unwrap()));
+            //     } else if value.is_array() {
+            //         value_u256.append(
+            //             &mut value
+            //             .as_array()
+            //             .unwrap()
+            //             .iter()
+            //             .map(|num| U256::from(num.as_u64().unwrap()))
+            //             .collect::<Vec<U256>>()
+            //         );
+            //     } else {
+            //         panic!("invalid value in input");
+            //     }
+            //     input.insert(key.clone(), value_u256);
+            // }
+            // let graph_bytes = std::fs::read(&witness_generator_bin).unwrap();
+            // let graph = init_graph(&graph_bytes).unwrap();
+            // let witness = witness::calculate_witness(input, &graph);
+            // println!("witness: {:?}", witness.unwrap());
             generate_witness_from_witnesscalc::<F<G1>>(
                 witness_generator_bin,
-                &witness_generator_file,
+                &vec![],
                 &input_json,
                 witness_generator_output)
         } else {
@@ -167,7 +273,7 @@ where
 #[cfg(not(target_family = "wasm"))]
 pub fn create_recursive_circuit_witnesscalc<G1, G2>(
     witness_generator_bin: &Path,
-    witness_generator_file: FileLocation,
+    witness_generator_file: &PathBuf,
     r1cs: R1CS<F<G1>>,
     private_inputs: Vec<HashMap<String, Value>>,
     start_public_input: Vec<F<G1>>,
@@ -177,6 +283,8 @@ where
     G1: Group<Base = <G2 as Group>::Scalar>,
     G2: Group<Base = <G1 as Group>::Scalar>,
 {
+    use std::time::Instant;
+
     let root = current_dir().unwrap();
     let witness_generator_output = root.join("circom_witness.wtns");
 
@@ -188,13 +296,17 @@ where
         .collect::<Vec<String>>();
     let mut current_public_input = start_public_input_hex.clone();
 
-    let witness_0 = compute_witness::<G1, G2>(
+    let graph_bin = std::fs::read(witness_generator_file)?;
+
+    let now = Instant::now();
+    let witness_0 = compute_witnesscalc::<G1, G2>(
         current_public_input.clone(),
         private_inputs[0].clone(),
         witness_generator_bin,
-        witness_generator_file.clone(),
+        &graph_bin,
         &witness_generator_output,
     );
+    println!("witness gen for iteration 0 takes: {:?}", now.elapsed());
 
     let circuit_0 = CircomCircuit {
         r1cs: r1cs.clone(),
@@ -212,13 +324,15 @@ where
     );
 
     for i in 0..iteration_count {
-        let witness = compute_witness::<G1, G2>(
+        let now = Instant::now();
+        let witness = compute_witnesscalc::<G1, G2>(
             current_public_input.clone(),
             private_inputs[i].clone(),
             witness_generator_bin,
-            witness_generator_file.clone(),
+            &graph_bin,
             &witness_generator_output,
         );
+        println!("witness gen for iteration {} takes: {:?}", i, now.elapsed());
 
         let circuit = CircomCircuit {
             r1cs: r1cs.clone(),
@@ -231,6 +345,7 @@ where
             .map(|&x| format!("{:?}", x).strip_prefix("0x").unwrap().to_string())
             .collect();
 
+        let now = Instant::now();
         let res = recursive_snark.prove_step(
             &pp,
             &circuit,
@@ -239,8 +354,10 @@ where
             z0_secondary.clone(),
         );
         assert!(res.is_ok());
+        println!("proving step for iteration {} takes: {:?}", i, now.elapsed());
     }
-    fs::remove_file(witness_generator_output)?;
+    // TODO: remove comment
+    // fs::remove_file(witness_generator_output)?;
 
     Ok(recursive_snark)
 }
