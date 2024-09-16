@@ -38,6 +38,30 @@ pub fn generate_witness_from_bin<Fr: PrimeField>(
     load_witness_from_file(witness_output)
 }
 
+pub fn generate_witness_from_witnesscalc<Fr: PrimeField>(
+    witness_bin_path: &Path,
+    witness_bin: &Path,
+    witness_input_json: &String,
+    witness_output: &Path,
+) -> Vec<Fr> {
+    let root = current_dir().unwrap();
+    let witness_generator_input = root.join("circom_input.json");
+    fs::write(&witness_generator_input, witness_input_json).unwrap();
+
+    let output = Command::new(witness_bin_path)
+        .arg(&witness_bin)
+        .arg(&witness_generator_input)
+        .arg(witness_output)
+        .output()
+        .expect("failed to execute process");
+    if output.stdout.len() > 0 || output.stderr.len() > 0 {
+        // print!("stdout: {}", str::from_utf8(&output.stdout).unwrap());
+        // print!("stderr: {}", str::from_utf8(&output.stderr).unwrap());
+    }
+    let _ = fs::remove_file(witness_generator_input);
+    load_witness_from_file(witness_output)
+}
+
 #[cfg(not(target_family = "wasm"))]
 pub fn generate_witness_from_wasm<Fr: PrimeField>(
     witness_wasm: &FileLocation,
